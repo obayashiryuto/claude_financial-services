@@ -4,9 +4,16 @@ description: Generate the add-in manifest XML with your cloud config baked in
 
 # Generate add-in manifest
 
-The script fetches the canonical manifest from `pivot.claude.ai/manifest.xml`
-and appends your config as URL query parameters. The add-in reads them at
-startup.
+The script fetches the canonical manifest and appends your config as URL query
+parameters. The add-in reads them at startup. Outlook uses a separate template
+because Microsoft's `MailApp` schema is distinct from the `TaskPaneApp` schema
+Excel/Word/PowerPoint share, so ask which apps they're deploying and generate
+one file per host.
+
+| Host arg | Apps | Template |
+|---|---|---|
+| `office` | Excel, Word, PowerPoint | `pivot.claude.ai/manifest.xml` |
+| `outlook` | Outlook (mail + calendar) | `pivot.claude.ai/manifest-outlook-3p.xml` |
 
 ## Keys by cloud
 
@@ -19,6 +26,22 @@ Prompt only for the keys their cloud path needs. Don't ask for all eight.
 | Foundry | `azure_resource_name` `azure_api_key` |
 | Gateway | `gateway_url` `gateway_token` `gateway_auth_header` `gateway_api_format` |
 | Gateway (`gateway_api_format=vertex`) | also `gcp_project_id` `gcp_region` |
+
+Amazon Bedrock is **not currently supported for the `outlook` host**; the script
+exits with an error if you pass `aws_*` keys with `outlook`.
+
+## Outlook — Microsoft Graph
+
+Outlook reads the user's mailbox and calendar via Microsoft Graph, which
+requires a one-time tenant-wide admin consent regardless of which cloud serves
+the model. Run [consent](consent.md#outlook--microsoft-graph-consent) before
+deploying — otherwise every user hits "Need admin approval" on first open.
+
+If their policy forbids consenting to a third-party app, prompt for
+`graph_client_id` (their own single-tenant Entra app's client ID with
+Mail.ReadWrite, Calendars.Read, People.Read, User.Read, offline_access
+delegated permissions and admin consent granted). Otherwise leave it unset and
+the add-in uses Anthropic's multi-tenant app.
 
 ## Entra SSO
 
@@ -149,11 +172,16 @@ template's version as-is.
 ## Run
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/build-manifest.mjs" manifest.xml \
+node "${CLAUDE_PLUGIN_ROOT}/scripts/build-manifest.mjs" office manifest.xml \
   gcp_project_id=<value> \
   gcp_region=<value> \
   auto_connect=0 \
   ...
+
+# and if they're also deploying Outlook:
+node "${CLAUDE_PLUGIN_ROOT}/scripts/build-manifest.mjs" outlook manifest-outlook.xml \
+  <same provider keys as above> \
+  graph_client_id=<value>   # only if NOT using Anthropic's app via the consent URL
 ```
 
 The script validates key names (unknown keys fail hard) and shape-hints values
@@ -173,3 +201,4 @@ match the symptom below. Edit `manifest.xml` directly, then re-validate.
 | "An add-in with this ID already exists" | Replace the text inside `<Id>` with a fresh UUID. The template carries the marketplace install's ID. |
 | Re-upload accepted but nothing changes | M365 caches by ID + version. Edit `<Version>` to a higher fourth segment (e.g. `1.0.0.9` → `1.0.0.10`) and re-validate. |
 | Only want Excel (not PowerPoint) | Remove `<Host>` elements for `Presentation`. **Two parallel lists:** the top-level `<Hosts>` uses `Name="Presentation"`, the one under `<VersionOverrides>` uses `xsi:type="Presentation"` — both must go or the manifest is inconsistent. The `xsi:type` block is multi-line, delete the whole `<Host xsi:type="Presentation">...</Host>`. |
+| Only want Excel/PPT, not Outlook | Nothing to remove — Outlook is a separate file. Just don't generate it. |
